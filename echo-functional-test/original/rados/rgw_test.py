@@ -1,0 +1,142 @@
+#!/usr/bin/env python
+
+import subprocess
+import atexit
+
+from datetime import datetime
+from hashlib import md5
+from socket import gethostname
+from sys import exit
+from json import loads
+from ConfigParser import ConfigParser as CP
+from socket import gethostname
+
+import ssl
+import boto
+import boto.s3.connection
+from boto.s3.key import Key
+
+NAG_OK       = 0
+NAG_WARNING  = 1
+NAG_CRITICAL = 2
+NAG_UNKNOWN  = 3
+
+
+## Put parameters in variables
+
+def read_config(config_file='/usr/lib/nagios/plugins/ceph/rgw_test.conf'):
+    config = CP()
+    config.read(config_file)
+    cfg = {}
+    cfg['host'] = config.get('connection','host')
+    cfg['port'] = config.getint('connection', 'port')
+    cfg['ssl'] = config.getboolean('connection', 'ssl')
+    cfg['block'] = config.getint('test','urandom_block_size')
+    cfg['bytes'] = config.getint('test','total_bytes')
+    cfg['bucket'] = config.get('test','bucket')
+    cfg['uid'] = config.get('test','uid')
+    cfg['nagios_host'] = config.get('send_nsca','nagios_host')
+    return cfg
+
+def get_s3_keys(user):
+    client_name = '.'.join(['client','rgw',gethostname().split('.')[0]])
+    cmd = ['radosgw-admin', '-n', client_name, 'user', 'info', '--uid', user]
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    ui = p.communicate()[0]
+    uid = loads(ui)
+    return (uid['keys'][0]['access_key'],uid['keys'][0]['secret_key'])
+
+def do_cleanup():
+    try:
+        key.delete()
+    except:
+        report(NAG_WARNING, "ERROR: Couldn't delete testing object")
+    connection.close()
+
+def report(status, msg):
+    msg = '\t'.join([
+        gethostname().split('.')[0],
+        'RGW S3 functional test',
+        str(status),
+        msg,
+        '\n'
+        ])
+    cmd = ['/usr/sbin/send_nsca', '-H', NAGIOS_HOST, '-c', '/etc/nagios/send_nsca.cfg', '-to', '30']
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    p.communicate(input=msg)
+    exit(status)
+
+config = read_config()
+
+AWS_ACCESS_KEY, AWS_SECRET_KEY  = get_s3_keys(config['uid'])
+HOST = config['host']
+PORT = config['port']
+SSL = config['ssl']
+
+URANDOM_BLOCK_SIZE = config['block']
+TOTAL_BYTES = config['bytes']
+
+BUCKET_NAME = config['bucket']
+
+NAGIOS_HOST = config['nagios_host']
+
+## Connect to the gateway
+# try:
+ssl._https_verify_certificates(False)
+connection = boto.connect_s3(
+    aws_access_key_id = AWS_ACCESS_KEY,
+    aws_secret_access_key = AWS_SECRET_KEY,
+    host = HOST,
+    port = PORT,
+    is_secure = SSL,
+    calling_format = boto.s3.connection.OrdinaryCallingFormat()
+)
+# except:
+#     report(NAG_CRITICAL,"ERROR: Couldn't connect to gateway {h}:{p}".format(h=HOST, p=PORT))
+#     raise
+
+try:
+    bucket = connection.get_bucket(BUCKET_NAME)
+except:
+    report(NAG_CRITICAL, "ERROR: Couldn't use bucket {b}".format(b=BUCKET_NAME))
+
+## Read some random stuff
+try:
+    with open('/dev/urandom','r') as ur:
+        randomdata = ur.read(1024)
+except:
+    report(NAG_UNKNOWN, "ERROR: Test couldn't read random data")
+
+## Generate name
+now = datetime.now()
+time_string = now.isoformat()
+object_name = "{b}_s3_{t}".format(b=BUCKET_NAME,t=time_string)
+
+key = Key(bucket)
+key.key = object_name
+
+data = randomdata * (TOTAL_BYTES/URANDOM_BLOCK_SIZE)
+
+## Write it
+try:
+    key.set_contents_from_string(data)
+    atexit.register(do_cleanup)
+except:
+    report(NAG_WARNING, "ERROR: Couldn't write object.")
+
+## read it back
+try:
+    read_back = key.get_contents_as_string()
+except:
+    report(NAG_WARNING, "ERROR: Couldn't read object back.")
+
+read_back_md5 = key.md5
+data_md5 = md5(data).hexdigest()
+
+## Check md5 sums
+if data_md5 == read_back_md5:
+    # do stuff for succesful test
+    report(NAG_OK, "S3 Service on {h} operating correctly.".format(h=HOST))
+else:
+    # do stuff for failed test
+    report(NAG_WARNING, "ERROR: MD5 checksums didn't match")

@@ -1,0 +1,1 @@
+{'stat_success': True, 'time_write': 0.0699000358581543, 'open_success': True, 'object_size': 1048576L, 'pool': 'data-test', 'read_success': True, 'conducted_epoch': 1542802335.456421, 'time_read': 0.02911520004272461, 'write_success': True, 'conducted': 'Wed Nov 21 12:12:15 2018', 'remove_success': True, 'copy_success': None}

@@ -1,0 +1,12 @@
+conducted_epoch	:1542802363.21
+conducted	:Wed Nov 21 12:12:43 2018
+time_write	:0.063117980957
+time_read	:0.0306041240692
+object_size	:1048576
+stat_success	:True
+open_success	:True
+read_success	:True
+write_success	:True
+remove_success	:True
+copy_success	:None
+pool	:data-test
